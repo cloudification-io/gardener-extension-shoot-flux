@@ -1,16 +1,6 @@
-// Copyright (c) 2018 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package secrets
 
@@ -45,7 +35,7 @@ const (
 	DataKeyCertificate = "tls.crt"
 	// DataKeyPrivateKey is the key in a secret data holding the private key.
 	DataKeyPrivateKey = "tls.key"
-	// DataKeyCertificateCA is the key in a secret data holding the CA certificate.
+	// DataKeyCertificateCA is the key in a secret data or config map data holding the CA certificate.
 	DataKeyCertificateCA = "ca.crt"
 	// DataKeyPrivateKeyCA is the key in a secret data holding the CA private key.
 	DataKeyPrivateKeyCA = "ca.key"
@@ -59,7 +49,7 @@ const (
 )
 
 // CertificateSecretConfig contains the specification a to-be-generated CA, server, or client certificate.
-// It always contains a 2048-bit RSA private key.
+// It always contains a 3072-bit RSA private key.
 type CertificateSecretConfig struct {
 	Name string
 
@@ -72,8 +62,9 @@ type CertificateSecretConfig struct {
 	SigningCA *Certificate
 	PKCS      int
 
-	Validity                    *time.Duration
-	SkipPublishingCACertificate bool
+	Validity                          *time.Duration
+	SkipPublishingCACertificate       bool
+	IncludeCACertificateInServerChain bool
 }
 
 // Certificate contains the private key, and the certificate. It does also contain the CA certificate
@@ -81,8 +72,10 @@ type CertificateSecretConfig struct {
 type Certificate struct {
 	Name string
 
-	CA                          *Certificate
-	SkipPublishingCACertificate bool
+	CA                                *Certificate
+	CertType                          CertType
+	SkipPublishingCACertificate       bool
+	IncludeCACertificateInServerChain bool
 
 	PrivateKey    *rsa.PrivateKey
 	PrivateKeyPEM []byte
@@ -104,14 +97,16 @@ func (s *CertificateSecretConfig) Generate() (DataInterface, error) {
 // GenerateCertificate is the same as Generate but returns a *Certificate instead of the DataInterface.
 func (s *CertificateSecretConfig) GenerateCertificate() (*Certificate, error) {
 	certificateObj := &Certificate{
-		Name:                        s.Name,
-		CA:                          s.SigningCA,
-		SkipPublishingCACertificate: s.SkipPublishingCACertificate,
+		Name:                              s.Name,
+		CA:                                s.SigningCA,
+		CertType:                          s.CertType,
+		SkipPublishingCACertificate:       s.SkipPublishingCACertificate,
+		IncludeCACertificateInServerChain: s.IncludeCACertificateInServerChain,
 	}
 
 	// If no cert type is given then we only return a certificate object that contains the CA.
 	if s.CertType != "" {
-		privateKey, err := GenerateKey(rand.Reader, 2048)
+		privateKey, err := GenerateKey(rand.Reader, 3072)
 		if err != nil {
 			return nil, err
 		}
@@ -162,11 +157,17 @@ func (c *Certificate) SecretData() map[string][]byte {
 		// compatibility).
 		data[DataKeyCertificateCA] = c.CertificatePEM
 		data[DataKeyPrivateKeyCA] = c.PrivateKeyPEM
+
 	case c.CA != nil:
-		// The certificate is not a CA certificate, so we add the signing CA certificate to it and use different
-		// keys in the secret data.
+		cert := c.CertificatePEM
+		if c.CertType == ServerCert && c.IncludeCACertificateInServerChain {
+			cert = make([]byte, 0, len(c.CA.CertificatePEM)+len(c.CertificatePEM))
+			cert = append(cert, c.CertificatePEM...)
+			cert = append(cert, c.CA.CertificatePEM...)
+		}
+
+		data[DataKeyCertificate] = cert
 		data[DataKeyPrivateKey] = c.PrivateKeyPEM
-		data[DataKeyCertificate] = c.CertificatePEM
 		if !c.SkipPublishingCACertificate {
 			data[DataKeyCertificateCA] = c.CA.CertificatePEM
 		}

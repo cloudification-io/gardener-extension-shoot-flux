@@ -1,16 +1,6 @@
-// Copyright (c) 2018 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package kubernetes
 
@@ -18,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kubernetesclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -30,14 +22,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	gardencoreinstall "github.com/gardener/gardener/pkg/apis/core/install"
+	securityinstall "github.com/gardener/gardener/pkg/apis/security/install"
 	seedmanagementinstall "github.com/gardener/gardener/pkg/apis/seedmanagement/install"
 	settingsinstall "github.com/gardener/gardener/pkg/apis/settings/install"
-	kubernetescache "github.com/gardener/gardener/pkg/client/kubernetes/cache"
-	"github.com/gardener/gardener/pkg/utils"
-	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 const (
@@ -63,6 +52,7 @@ func init() {
 		gardencoreinstall.AddToScheme,
 		seedmanagementinstall.AddToScheme,
 		settingsinstall.AddToScheme,
+		securityinstall.AddToScheme,
 	)
 
 	utilruntime.Must(apiutil.AddToProtobufScheme(protobufSchemeBuilder.AddToScheme))
@@ -78,6 +68,7 @@ func NewClientFromFile(masterURL, kubeconfigPath string, fns ...ConfigFunc) (Int
 		if err != nil {
 			return nil, err
 		}
+
 		opts := append([]ConfigFunc{WithRESTConfig(kubeconfig)}, fns...)
 		return NewWithConfig(opts...)
 	}
@@ -99,12 +90,16 @@ func NewClientFromFile(masterURL, kubeconfigPath string, fns ...ConfigFunc) (Int
 
 // NewClientFromBytes creates a new Client struct for a given kubeconfig byte slice.
 func NewClientFromBytes(kubeconfig []byte, fns ...ConfigFunc) (Interface, error) {
-	config, err := RESTConfigFromClientConnectionConfiguration(nil, kubeconfig)
+	clientConfig, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	restConfig, err := clientConfig.ClientConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	opts := append([]ConfigFunc{WithRESTConfig(config)}, fns...)
+	opts := append([]ConfigFunc{WithRESTConfig(restConfig)}, fns...)
 	return NewWithConfig(opts...)
 }
 
@@ -172,6 +167,21 @@ func RESTConfigFromClientConnectionConfiguration(cfg *componentbaseconfig.Client
 	return restConfig, nil
 }
 
+// RESTConfigFromKubeconfigFile returns a rest.Config from the bytes of a kubeconfig file.
+// Allowed fields are not considered unsupported if used in the kubeconfig.
+func RESTConfigFromKubeconfigFile(kubeconfigFile string, allowedFields ...string) (*rest.Config, error) {
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigFile},
+		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: ""}},
+	)
+
+	if err := validateClientConfig(clientConfig, allowedFields); err != nil {
+		return nil, err
+	}
+
+	return clientConfig.ClientConfig()
+}
+
 // RESTConfigFromKubeconfig returns a rest.Config from the bytes of a kubeconfig.
 // Allowed fields are not considered unsupported if used in the kubeconfig.
 func RESTConfigFromKubeconfig(kubeconfig []byte, allowedFields ...string) (*rest.Config, error) {
@@ -215,45 +225,21 @@ func ValidateConfigWithAllowList(config clientcmdapi.Config, allowedFields []str
 
 	for user, authInfo := range config.AuthInfos {
 		switch {
-		case authInfo.ClientCertificate != "" && !utils.ValueExists(AuthClientCertificate, validFields):
+		case authInfo.ClientCertificate != "" && !slices.Contains(validFields, AuthClientCertificate):
 			return fmt.Errorf("client certificate files are not supported (user %q), these are the valid fields: %+v", user, validFields)
-		case authInfo.ClientKey != "" && !utils.ValueExists(AuthClientKey, validFields):
+		case authInfo.ClientKey != "" && !slices.Contains(validFields, AuthClientKey):
 			return fmt.Errorf("client key files are not supported (user %q), these are the valid fields: %+v", user, validFields)
-		case authInfo.TokenFile != "" && !utils.ValueExists(AuthTokenFile, validFields):
+		case authInfo.TokenFile != "" && !slices.Contains(validFields, AuthTokenFile):
 			return fmt.Errorf("token files are not supported (user %q), these are the valid fields: %+v", user, validFields)
-		case (authInfo.Impersonate != "" || len(authInfo.ImpersonateGroups) > 0) && !utils.ValueExists(AuthImpersonate, validFields):
+		case (authInfo.Impersonate != "" || len(authInfo.ImpersonateGroups) > 0) && !slices.Contains(validFields, AuthImpersonate):
 			return fmt.Errorf("impersonation is not supported, these are the valid fields: %+v", validFields)
-		case (authInfo.AuthProvider != nil && len(authInfo.AuthProvider.Config) > 0) && !utils.ValueExists(AuthProvider, validFields):
+		case (authInfo.AuthProvider != nil && len(authInfo.AuthProvider.Config) > 0) && !slices.Contains(validFields, AuthProvider):
 			return fmt.Errorf("auth provider configurations are not supported (user %q), these are the valid fields: %+v", user, validFields)
-		case authInfo.Exec != nil && !utils.ValueExists(AuthExec, validFields):
+		case authInfo.Exec != nil && !slices.Contains(validFields, AuthExec):
 			return fmt.Errorf("exec configurations are not supported (user %q), these are the valid fields: %+v", user, validFields)
 		}
 	}
 	return nil
-}
-
-var supportedKubernetesVersions = []string{
-	"1.20",
-	"1.21",
-	"1.22",
-	"1.23",
-	"1.24",
-	"1.25",
-	"1.26",
-}
-
-func checkIfSupportedKubernetesVersion(gitVersion string) error {
-	for _, supportedVersion := range supportedKubernetesVersions {
-		ok, err := versionutils.CompareVersions(gitVersion, "~", supportedVersion)
-		if err != nil {
-			return err
-		}
-
-		if ok {
-			return nil
-		}
-	}
-	return fmt.Errorf("unsupported kubernetes version %q", gitVersion)
 }
 
 // NewWithConfig returns a new Kubernetes base client.
@@ -287,9 +273,9 @@ func newClientSet(conf *Config) (Interface, error) {
 
 	if runtimeCache == nil {
 		runtimeCache, err = conf.newRuntimeCache(conf.restConfig, cache.Options{
-			Scheme: conf.clientOptions.Scheme,
-			Mapper: conf.clientOptions.Mapper,
-			Resync: conf.cacheResync,
+			Scheme:     conf.clientOptions.Scheme,
+			Mapper:     conf.clientOptions.Mapper,
+			SyncPeriod: conf.cacheSyncPeriod,
 		})
 		if err != nil {
 			return nil, err
@@ -298,7 +284,7 @@ func newClientSet(conf *Config) (Interface, error) {
 
 	var uncachedClient client.Client
 	if runtimeAPIReader == nil || runtimeClient == nil {
-		uncachedClient, err = client.New(conf.restConfig, conf.clientOptions)
+		uncachedClient, err = newClient(conf, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -312,17 +298,13 @@ func newClientSet(conf *Config) (Interface, error) {
 		if conf.disableCache {
 			runtimeClient = uncachedClient
 		} else {
-			delegatingClient, err := client.NewDelegatingClient(client.NewDelegatingClientInput{
-				CacheReader:     runtimeCache,
-				Client:          uncachedClient,
-				UncachedObjects: conf.uncachedObjects,
-			})
+			cachedClient, err := newClient(conf, runtimeCache)
 			if err != nil {
 				return nil, err
 			}
 
 			runtimeClient = &FallbackClient{
-				Client: delegatingClient,
+				Client: cachedClient,
 				Reader: runtimeAPIReader,
 			}
 		}
@@ -378,35 +360,50 @@ func defaultContentTypeProtobuf(c *rest.Config) *rest.Config {
 	return &config
 }
 
+func newClient(conf *Config, reader client.Reader) (client.Client, error) {
+	cacheOptions := conf.clientOptions.Cache
+	if cacheOptions == nil {
+		cacheOptions = &client.CacheOptions{}
+	}
+
+	cacheOptions.Reader = reader
+	conf.clientOptions.Cache = cacheOptions
+
+	return client.New(conf.restConfig, conf.clientOptions)
+}
+
 var _ client.Client = &FallbackClient{}
 
 // FallbackClient holds a `client.Client` and a `client.Reader` which is meant as a fallback
-// in case Get/List requests with the ordinary `client.Client` fail (e.g. because of cache errors).
+// in case the kind of an object is configured in `KindToNamespaces` but the namespace isn't.
 type FallbackClient struct {
 	client.Client
-	Reader client.Reader
+	Reader           client.Reader
+	KindToNamespaces map[string]sets.Set[string]
 }
 
-var cacheError = &kubernetescache.CacheError{}
-
 // Get retrieves an obj for a given object key from the Kubernetes Cluster.
-// In case of a cache error, the underlying API reader is used to execute the request again.
+// `client.Reader` is used in case the kind of an object is configured in `KindToNamespaces` but the namespace isn't.
 func (d *FallbackClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	err := d.Client.Get(ctx, key, obj)
-	if err != nil && errors.As(err, &cacheError) {
-		logf.Log.V(1).Info("Falling back to API reader because a cache error occurred", "error", err)
-		return d.Reader.Get(ctx, key, obj)
+	gvk, err := apiutil.GVKForObject(obj, d.Scheme())
+	if err != nil {
+		return err
 	}
-	return err
+
+	// Check if there are specific namespaces for this object's kind in the cache.
+	namespaces, ok := d.KindToNamespaces[gvk.Kind]
+
+	// If there are specific namespaces for this kind in the cache and the object's namespace is not cached,
+	// use the API reader to get the object.
+	if ok && !namespaces.Has(obj.GetNamespace()) {
+		return d.Reader.Get(ctx, key, obj, opts...)
+	}
+
+	// Otherwise, try to get the object from the cache.
+	return d.Client.Get(ctx, key, obj, opts...)
 }
 
 // List retrieves list of objects for a given namespace and list options.
-// In case of a cache error, the underlying API reader is used to execute the request again.
 func (d *FallbackClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	err := d.Client.List(ctx, list, opts...)
-	if err != nil && errors.As(err, &cacheError) {
-		logf.Log.V(1).Info("Falling back to API reader because a cache error occurred", "error", err)
-		return d.Reader.List(ctx, list, opts...)
-	}
-	return err
+	return d.Client.List(ctx, list, opts...)
 }

@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package util
 
@@ -24,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
@@ -32,7 +22,6 @@ import (
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/chartrenderer"
 	kubernetesclient "github.com/gardener/gardener/pkg/client/kubernetes"
-	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/secrets"
 )
 
@@ -72,9 +61,9 @@ func NewShootClients(c client.Client, clientset kubernetes.Interface, gardenerCl
 
 // ApplyRESTOptions applies RESTOptions to the given rest.Config
 func ApplyRESTOptions(restConfig *rest.Config, restOptions extensionsconfig.RESTOptions) *rest.Config {
-	restConfig.QPS = pointer.Float32Deref(restOptions.QPS, restConfig.QPS)
-	restConfig.Burst = pointer.IntDeref(restOptions.Burst, restConfig.Burst)
-	restConfig.Timeout = pointer.DurationDeref(restOptions.Timeout, restConfig.Timeout)
+	restConfig.QPS = ptr.Deref(restOptions.QPS, restConfig.QPS)
+	restConfig.Burst = ptr.Deref(restOptions.Burst, restConfig.Burst)
+	restConfig.Timeout = ptr.Deref(restOptions.Timeout, restConfig.Timeout)
 	return restConfig
 }
 
@@ -91,11 +80,11 @@ func NewClientForShoot(ctx context.Context, c client.Client, namespace string, o
 	)
 
 	if os.Getenv("GARDENER_SHOOT_CLIENT") != "external" {
-		if err = c.Get(ctx, kubernetesutils.Key(namespace, v1beta1constants.SecretNameGardenerInternal), gardenerSecret); err != nil && apierrors.IsNotFound(err) {
-			err = c.Get(ctx, kubernetesutils.Key(namespace, v1beta1constants.SecretNameGardener), gardenerSecret)
+		if err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: v1beta1constants.SecretNameGardenerInternal}, gardenerSecret); err != nil && apierrors.IsNotFound(err) {
+			err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: v1beta1constants.SecretNameGardener}, gardenerSecret)
 		}
 	} else {
-		err = c.Get(ctx, kubernetesutils.Key(namespace, v1beta1constants.SecretNameGardener), gardenerSecret)
+		err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: v1beta1constants.SecretNameGardener}, gardenerSecret)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -108,7 +97,12 @@ func NewClientForShoot(ctx context.Context, c client.Client, namespace string, o
 	ApplyRESTOptions(shootRESTConfig, restOptions)
 
 	if opts.Mapper == nil {
-		mapper, err := apiutil.NewDynamicRESTMapper(shootRESTConfig, apiutil.WithLazyDiscovery)
+		httpClient, err := rest.HTTPClientFor(shootRESTConfig)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get HTTP client for config: %w", err)
+		}
+
+		mapper, err := apiutil.NewDynamicRESTMapper(shootRESTConfig, httpClient)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create new DynamicRESTMapper: %w", err)
 		}

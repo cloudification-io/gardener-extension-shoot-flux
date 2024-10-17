@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package extension
 
@@ -24,8 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/runtime/inject"
 
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
@@ -51,33 +41,19 @@ type reconciler struct {
 
 // NewReconciler creates a new reconcile.Reconciler that reconciles
 // Extension resources of Gardener's `extensions.gardener.cloud` API group.
-func NewReconciler(args AddArgs) reconcile.Reconciler {
+func NewReconciler(mgr manager.Manager, args AddArgs) reconcile.Reconciler {
 	return reconcilerutils.OperationAnnotationWrapper(
+		mgr,
 		func() client.Object { return &extensionsv1alpha1.Extension{} },
 		&reconciler{
 			actuator:      args.Actuator,
-			statusUpdater: extensionscontroller.NewStatusUpdater(),
+			client:        mgr.GetClient(),
+			reader:        mgr.GetAPIReader(),
+			statusUpdater: extensionscontroller.NewStatusUpdater(mgr.GetClient()),
 			finalizerName: fmt.Sprintf("%s/%s", FinalizerPrefix, args.FinalizerSuffix),
 			resync:        args.Resync,
 		},
 	)
-}
-
-// InjectFunc enables dependency injection into the actuator.
-func (r *reconciler) InjectFunc(f inject.Func) error {
-	return f(r.actuator)
-}
-
-// InjectClient injects the controller runtime client into the reconciler.
-func (r *reconciler) InjectClient(client client.Client) error {
-	r.client = client
-	r.statusUpdater.InjectClient(client)
-	return nil
-}
-
-func (r *reconciler) InjectAPIReader(reader client.Reader) error {
-	r.reader = reader
-	return nil
 }
 
 // Reconcile is the reconciler function that gets executed in case there are new events for `Extension` resources.
@@ -113,7 +89,7 @@ func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	case operationType == gardencorev1beta1.LastOperationTypeMigrate:
 		return r.migrate(ctx, log, ex)
 	case ex.DeletionTimestamp != nil:
-		return r.delete(ctx, log, ex)
+		return r.delete(ctx, log, ex, cluster != nil && v1beta1helper.ShootNeedsForceDeletion(cluster.Shoot))
 	case operationType == gardencorev1beta1.LastOperationTypeRestore:
 		return r.restore(ctx, log, ex, operationType)
 	default:
@@ -157,7 +133,7 @@ func (r *reconciler) reconcile(
 	return reconcile.Result{}, nil
 }
 
-func (r *reconciler) delete(ctx context.Context, log logr.Logger, ex *extensionsv1alpha1.Extension) (reconcile.Result, error) {
+func (r *reconciler) delete(ctx context.Context, log logr.Logger, ex *extensionsv1alpha1.Extension, forceDelete bool) (reconcile.Result, error) {
 	if !controllerutil.ContainsFinalizer(ex, r.finalizerName) {
 		log.Info("Deleting Extension causes a no-op as there is no finalizer")
 		return reconcile.Result{}, nil
@@ -168,7 +144,13 @@ func (r *reconciler) delete(ctx context.Context, log logr.Logger, ex *extensions
 	}
 
 	log.Info("Starting the deletion of Extension")
-	if err := r.actuator.Delete(ctx, log, ex); err != nil {
+	var err error
+	if forceDelete {
+		err = r.actuator.ForceDelete(ctx, log, ex)
+	} else {
+		err = r.actuator.Delete(ctx, log, ex)
+	}
+	if err != nil {
 		_ = r.statusUpdater.Error(ctx, log, ex, reconcilerutils.ReconcileErrCauseOrErr(err), gardencorev1beta1.LastOperationTypeDelete, "Error deleting the Extension")
 		return reconcilerutils.ReconcileErr(err)
 	}

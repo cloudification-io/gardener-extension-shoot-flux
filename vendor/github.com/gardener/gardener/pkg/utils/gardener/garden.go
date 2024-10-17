@@ -1,16 +1,6 @@
-// Copyright (c) 2018 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package gardener
 
@@ -21,24 +11,33 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	gardencore "github.com/gardener/gardener/pkg/apis/core"
+	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	"github.com/gardener/gardener/pkg/apis/operations"
+	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
+	"github.com/gardener/gardener/pkg/apis/seedmanagement"
+	"github.com/gardener/gardener/pkg/apis/settings"
 	"github.com/gardener/gardener/pkg/utils"
+	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
+	"github.com/gardener/gardener/pkg/utils/secrets"
 )
 
 // Domain contains information about a domain configured in the garden cluster.
 type Domain struct {
-	Domain         string
-	Provider       string
-	Zone           string
-	SecretData     map[string][]byte
-	IncludeDomains []string
-	ExcludeDomains []string
-	IncludeZones   []string
-	ExcludeZones   []string
+	Domain     string
+	Provider   string
+	Zone       string
+	SecretData map[string][]byte
 }
 
 // GetDefaultDomains finds all the default domain secrets within the given map and returns a list of
@@ -71,18 +70,16 @@ func GetInternalDomain(secrets map[string]*corev1.Secret) (*Domain, error) {
 }
 
 func constructDomainFromSecret(secret *corev1.Secret) (*Domain, error) {
-	provider, domain, zone, includeZones, excludeZones, err := GetDomainInfoFromAnnotations(secret.Annotations)
+	provider, domain, zone, err := GetDomainInfoFromAnnotations(secret.Annotations)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Domain{
-		Domain:       domain,
-		Provider:     provider,
-		Zone:         zone,
-		SecretData:   secret.Data,
-		IncludeZones: includeZones,
-		ExcludeZones: excludeZones,
+		Domain:     domain,
+		Provider:   provider,
+		Zone:       zone,
+		SecretData: secret.Data,
 	}, nil
 }
 
@@ -106,17 +103,18 @@ func ReadGardenSecrets(
 	c client.Reader,
 	namespace string,
 	enforceInternalDomainSecret bool,
+	enforceShootServiceAccountIssuerSecret bool,
 ) (
 	map[string]*corev1.Secret,
 	error,
 ) {
 	var (
-		logInfo                             []string
-		secretsMap                          = make(map[string]*corev1.Secret)
-		numberOfInternalDomainSecrets       = 0
-		numberOfOpenVPNDiffieHellmanSecrets = 0
-		numberOfAlertingSecrets             = 0
-		numberOfGlobalMonitoringSecrets     = 0
+		logInfo                                  []string
+		secretsMap                               = make(map[string]*corev1.Secret)
+		numberOfInternalDomainSecrets            = 0
+		numberOfAlertingSecrets                  = 0
+		numberOfGlobalMonitoringSecrets          = 0
+		numberOfShootServiceAccountIssuerSecrets = 0
 	)
 
 	secretList := &corev1.SecretList{}
@@ -128,7 +126,7 @@ func ReadGardenSecrets(
 		// Retrieving default domain secrets based on all secrets in the Garden namespace which have
 		// a label indicating the Garden role default-domain.
 		if secret.Labels[v1beta1constants.GardenRole] == v1beta1constants.GardenRoleDefaultDomain {
-			_, domain, _, _, _, err := GetDomainInfoFromAnnotations(secret.Annotations)
+			_, domain, _, err := GetDomainInfoFromAnnotations(secret.Annotations)
 			if err != nil {
 				log.Error(err, "Error getting information out of default domain secret", "secret", client.ObjectKeyFromObject(&secret))
 				continue
@@ -142,7 +140,7 @@ func ReadGardenSecrets(
 		// Retrieving internal domain secrets based on all secrets in the Garden namespace which have
 		// a label indicating the Garden role internal-domain.
 		if secret.Labels[v1beta1constants.GardenRole] == v1beta1constants.GardenRoleInternalDomain {
-			_, domain, _, _, _, err := GetDomainInfoFromAnnotations(secret.Annotations)
+			_, domain, _, err := GetDomainInfoFromAnnotations(secret.Annotations)
 			if err != nil {
 				log.Error(err, "Error getting information out of internal domain secret", "secret", client.ObjectKeyFromObject(&secret))
 				continue
@@ -152,19 +150,6 @@ func ReadGardenSecrets(
 			secretsMap[v1beta1constants.GardenRoleInternalDomain] = &internalDomainSecret
 			logInfo = append(logInfo, fmt.Sprintf("internal domain secret %q for domain %q", secret.Name, domain))
 			numberOfInternalDomainSecrets++
-		}
-
-		// Retrieving Diffie-Hellman secret for OpenVPN based on all secrets in the Garden namespace which have
-		// a label indicating the Garden role openvpn-diffie-hellman.
-		if secret.Labels[v1beta1constants.GardenRole] == v1beta1constants.GardenRoleOpenVPNDiffieHellman {
-			openvpnDiffieHellman := secret
-			key := "dh2048.pem"
-			if _, ok := secret.Data[key]; !ok {
-				return nil, fmt.Errorf("cannot use OpenVPN Diffie Hellman secret '%s' as it does not contain key '%s' (whose value should be the actual Diffie Hellman key)", secret.Name, key)
-			}
-			secretsMap[v1beta1constants.GardenRoleOpenVPNDiffieHellman] = &openvpnDiffieHellman
-			logInfo = append(logInfo, fmt.Sprintf("OpenVPN Diffie Hellman secret %q", secret.Name))
-			numberOfOpenVPNDiffieHellmanSecrets++
 		}
 
 		// Retrieve the alerting secret to configure alerting. Either in cluster email alerting or
@@ -196,6 +181,18 @@ func ReadGardenSecrets(
 			secretsMap[v1beta1constants.GardenRoleGlobalShootRemoteWriteMonitoring] = &monitoringSecret
 			logInfo = append(logInfo, fmt.Sprintf("monitoring basic auth secret %q", secret.Name))
 		}
+
+		if secret.Labels[v1beta1constants.GardenRole] == v1beta1constants.GardenRoleShootServiceAccountIssuer {
+			shootIssuer := secret
+			if hostname, ok := secret.Data["hostname"]; !ok {
+				return nil, fmt.Errorf("cannot use Shoot Service Account Issuer secret '%s' as it does not contain key 'hostname'", secret.Name)
+			} else if strings.TrimSpace(string(hostname)) == "" {
+				return nil, fmt.Errorf("cannot use Shoot Service Account Issuer secret '%s' as it does contain an empty 'hostname' key", secret.Name)
+			}
+			secretsMap[v1beta1constants.GardenRoleShootServiceAccountIssuer] = &shootIssuer
+			logInfo = append(logInfo, fmt.Sprintf("Shoot Service Account Issuer secret %q", secret.Name))
+			numberOfShootServiceAccountIssuerSecrets++
+		}
 	}
 
 	// For each Shoot we create a LoadBalancer(LB) pointing to the API server of the Shoot. Because the technical address
@@ -210,15 +207,6 @@ func ReadGardenSecrets(
 		return nil, fmt.Errorf("need an internal domain secret but found none")
 	}
 
-	// The VPN bridge from a Shoot's control plane running in the Seed cluster to the worker nodes of the Shoots is based
-	// on OpenVPN. It requires a Diffie Hellman key. If no such key is explicitly provided as secret in the garden namespace
-	// then the Gardener will use a default one (not recommended, but useful for local development). If a secret is specified
-	// its key will be used for all Shoots. However, at most only one of such a secret is allowed to be specified (otherwise,
-	// the Gardener cannot determine which to choose).
-	if numberOfOpenVPNDiffieHellmanSecrets > 1 {
-		return nil, fmt.Errorf("can only accept at most one OpenVPN Diffie Hellman secret, but found %d", numberOfOpenVPNDiffieHellmanSecrets)
-	}
-
 	// Operators can configure gardener to send email alerts or send the alerts to an external alertmanager. If no configuration
 	// is provided then no alerts will be sent.
 	if numberOfAlertingSecrets > 1 {
@@ -229,6 +217,149 @@ func ReadGardenSecrets(
 		return nil, fmt.Errorf("can only accept at most one global monitoring secret, but found %d", numberOfGlobalMonitoringSecrets)
 	}
 
+	// Ensure that configuration exists if the ShootManagedIssuer feature gate is enabled.
+	if enforceShootServiceAccountIssuerSecret && numberOfShootServiceAccountIssuerSecrets == 0 {
+		return nil, fmt.Errorf("feature gate ShootManagedIssuer is enabled, but shoot service account issuer secret is missing")
+	}
+
+	// The managed shoot service account issuer is configured centrally per Garden cluster.
+	// The presence of more than one secret is an ambiguous behaviour and should be disallowed.
+	if numberOfShootServiceAccountIssuerSecrets > 1 {
+		return nil, fmt.Errorf("can only accept at most one shoot service account issuer secret, but found %d", numberOfShootServiceAccountIssuerSecrets)
+	}
+
 	log.Info("Found secrets", "namespace", namespace, "secrets", logInfo)
 	return secretsMap, nil
+}
+
+const (
+	// SecretNamePrefixGardenAccess is the prefix of all secrets containing credentials for accessing the garden cluster.
+	SecretNamePrefixGardenAccess = "garden-access-"
+	// VolumeMountPathGenericGardenKubeconfig is a constant for the path to which the generic garden kubeconfig will be mounted.
+	VolumeMountPathGenericGardenKubeconfig = "/var/run/secrets/gardener.cloud/garden/generic-kubeconfig"
+	// PathGardenToken is a constant for the path at which the garden token file is accessible.
+	PathGardenToken = VolumeMountPathGenericGardenKubeconfig + "/" + resourcesv1alpha1.DataKeyToken
+	// PathGenericGardenKubeconfig is a constant for the path at which the kubeconfig file is accessible.
+	PathGenericGardenKubeconfig = VolumeMountPathGenericGardenKubeconfig + "/" + secrets.DataKeyKubeconfig
+)
+
+// NewGardenAccessSecret returns a new AccessSecret object and initializes it with an empty corev1.Secret object
+// with the given name and namespace. If not already done, the name will be prefixed with the
+// SecretNamePrefixGardenAccess. The ServiceAccountName field will be defaulted with the name.
+func NewGardenAccessSecret(name, namespace string) *AccessSecret {
+	if !strings.HasPrefix(name, SecretNamePrefixGardenAccess) {
+		name = SecretNamePrefixGardenAccess + name
+	}
+
+	return &AccessSecret{
+		Secret: &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+			},
+		},
+		ServiceAccountName: strings.TrimPrefix(name, SecretNamePrefixGardenAccess),
+		Class:              resourcesv1alpha1.ResourceManagerClassGarden,
+	}
+}
+
+// InjectGenericGardenKubeconfig injects the volumes, volume mounts, and env vars for the generic garden kubeconfig into
+// the provided object. The access secret name must be the name of a secret containing a JWT token which should be used
+// by the kubeconfig. If the object has multiple containers then the default is to inject it into all of them. If it
+// should only be done for a selection of containers then their respective names must be provided.
+// If any of the containers in the object already has the GARDEN_KUBECONFIG env var, the object is not mutated.
+func InjectGenericGardenKubeconfig(obj runtime.Object, genericKubeconfigName, accessSecretName string, containerNames ...string) error {
+	// check for presence of env var
+	hasGardenKubeconfig := false
+
+	if err := kubernetesutils.VisitPodSpec(obj, func(podSpec *corev1.PodSpec) {
+		kubernetesutils.VisitContainers(podSpec, func(container *corev1.Container) {
+			if kubernetesutils.HasEnvVar(*container, v1beta1constants.EnvGenericGardenKubeconfig) {
+				hasGardenKubeconfig = true
+			}
+		}, containerNames...)
+	}); err != nil {
+		return err
+	}
+
+	if hasGardenKubeconfig {
+		return nil
+	}
+
+	// inject volume and volumeMounts
+	if err := injectGenericKubeconfig(
+		obj,
+		genericKubeconfigName,
+		accessSecretName,
+		"garden-kubeconfig",
+		VolumeMountPathGenericGardenKubeconfig,
+		containerNames...,
+	); err != nil {
+		return err
+	}
+
+	// inject env var
+	return kubernetesutils.VisitPodSpec(obj, func(podSpec *corev1.PodSpec) {
+		kubernetesutils.VisitContainers(podSpec, func(container *corev1.Container) {
+			kubernetesutils.AddEnvVar(container, corev1.EnvVar{
+				Name:  v1beta1constants.EnvGenericGardenKubeconfig,
+				Value: PathGenericGardenKubeconfig,
+			}, true)
+		}, containerNames...)
+	})
+}
+
+// PrepareGardenClientRestConfig takes a base rest config and adds an optional host and CA certificate.
+func PrepareGardenClientRestConfig(baseConfig *rest.Config, address *string, caCert []byte) *rest.Config {
+	gardenClientRestConfig := rest.CopyConfig(baseConfig)
+	if address != nil {
+		gardenClientRestConfig.Host = *address
+	}
+	if caCert != nil {
+		gardenClientRestConfig.TLSClientConfig = rest.TLSClientConfig{
+			CAData: caCert,
+		}
+	}
+	return gardenClientRestConfig
+}
+
+// DefaultGardenerGVKsForEncryption returns the list of GroupVersionKinds served by Gardener API Server which are encrypted by default.
+func DefaultGardenerGVKsForEncryption() []schema.GroupVersionKind {
+	return []schema.GroupVersionKind{
+		gardencorev1beta1.SchemeGroupVersion.WithKind("ControllerDeployment"),
+		gardencorev1beta1.SchemeGroupVersion.WithKind("ControllerRegistration"),
+		gardencorev1beta1.SchemeGroupVersion.WithKind("InternalSecret"),
+		gardencorev1beta1.SchemeGroupVersion.WithKind("ShootState"),
+	}
+}
+
+// DefaultGardenerResourcesForEncryption returns the list of resources served by Gardener API Server which are encrypted by default.
+func DefaultGardenerResourcesForEncryption() sets.Set[string] {
+	return sets.New(
+		gardencorev1beta1.Resource("controllerdeployments").String(),
+		gardencorev1beta1.Resource("controllerregistrations").String(),
+		gardencorev1beta1.Resource("internalsecrets").String(),
+		gardencorev1beta1.Resource("shootstates").String(),
+	)
+}
+
+// IsServedByGardenerAPIServer returns true if the passed resources is served by the Gardener API Server.
+func IsServedByGardenerAPIServer(resource string) bool {
+	for _, groupName := range []string{
+		gardencore.GroupName,
+		operations.GroupName,
+		settings.GroupName,
+		seedmanagement.GroupName,
+	} {
+		if strings.HasSuffix(resource, groupName) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// IsServedByKubeAPIServer returns true if the passed resources is served by the Kube API Server.
+func IsServedByKubeAPIServer(resource string) bool {
+	return !IsServedByGardenerAPIServer(resource)
 }

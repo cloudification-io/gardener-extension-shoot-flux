@@ -1,16 +1,6 @@
-// Copyright (c) 2020 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package extensions
 
@@ -92,6 +82,7 @@ func WaitUntilObjectReadyWithHealthFunction(
 		healthFunc = health.And(health.ObjectHasAnnotationWithValue(v1beta1constants.GardenerTimestamp, expectedTimestamp), healthFunc)
 	}
 
+	var objectKind string
 	if err := retry.UntilTimeout(ctx, interval, timeout, func(ctx context.Context) (bool, error) {
 		retryCountUntilSevere++
 
@@ -100,6 +91,12 @@ func WaitUntilObjectReadyWithHealthFunction(
 				return retry.MinorError(err)
 			}
 			return retry.SevereError(err)
+		}
+
+		if objectKind == "" {
+			if objectKind = obj.GetObjectKind().GroupVersionKind().Kind; objectKind != "" {
+				log = log.WithValues("kind", objectKind)
+			}
 		}
 
 		if err := healthFunc(obj); err != nil {
@@ -123,9 +120,9 @@ func WaitUntilObjectReadyWithHealthFunction(
 	}); err != nil {
 		message := fmt.Sprintf("Error while waiting for %s to become ready", extensionKey(kind, namespace, name))
 		if lastObservedError != nil {
-			return v1beta1helper.NewErrorWithCodes(fmt.Errorf("%s: %w", message, lastObservedError), v1beta1helper.DeprecatedDetermineErrorCodes(lastObservedError)...)
+			return fmt.Errorf("%s: %w", message, lastObservedError)
 		}
-		return v1beta1helper.NewErrorWithCodes(fmt.Errorf("%s: %w", message, err), v1beta1helper.DeprecatedDetermineErrorCodes(err)...)
+		return fmt.Errorf("%s: %w", message, err)
 	}
 
 	return nil
@@ -223,21 +220,21 @@ func WaitUntilExtensionObjectDeleted(
 		}
 
 		if lastErr := obj.GetExtensionStatus().GetLastError(); lastErr != nil {
-			log.Error(fmt.Errorf(lastErr.Description), "Object did not get deleted yet")
+			log.Info("Object did not get deleted yet", "description", lastErr.Description)
 			lastObservedError = v1beta1helper.NewErrorWithCodes(errors.New(lastErr.Description), lastErr.Codes...)
 		}
 
-		var message = fmt.Sprintf("%s is still present", extensionKey(kind, namespace, name))
+		var message = extensionKey(kind, namespace, name) + " is still present"
 		if lastObservedError != nil {
 			message += fmt.Sprintf(", last observed error: %s", lastObservedError.Error())
 		}
-		return retry.MinorError(fmt.Errorf(message))
+		return retry.MinorError(errors.New(message))
 	}); err != nil {
-		message := fmt.Sprintf("Failed to delete %s", extensionKey(kind, namespace, name))
+		message := "Failed to delete " + extensionKey(kind, namespace, name)
 		if lastObservedError != nil {
-			return v1beta1helper.NewErrorWithCodes(fmt.Errorf("%s: %w", message, lastObservedError), v1beta1helper.DeprecatedDetermineErrorCodes(lastObservedError)...)
+			return fmt.Errorf("%s: %w", message, lastObservedError)
 		}
-		return v1beta1helper.NewErrorWithCodes(fmt.Errorf("%s: %w", message, err), v1beta1helper.DeprecatedDetermineErrorCodes(err)...)
+		return fmt.Errorf("%s: %w", message, err)
 	}
 
 	return nil
@@ -284,7 +281,7 @@ func RestoreExtensionObjectState(
 			extensionStatus.SetResources(extensionResourceState.Resources)
 
 			if err := c.Status().Patch(ctx, extensionObj, patch); err != nil {
-				return v1beta1helper.NewErrorWithCodes(err, v1beta1helper.DeprecatedDetermineErrorCodes(err)...)
+				return err
 			}
 
 			for _, r := range extensionResourceState.Resources {
@@ -299,10 +296,10 @@ func RestoreExtensionObjectState(
 			if resourceData != nil {
 				obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&resourceData.Data)
 				if err != nil {
-					return v1beta1helper.DeprecatedDetermineError(err)
+					return err
 				}
 				if err := unstructuredutils.CreateOrPatchObjectByRef(ctx, c, &resourceRef, extensionObj.GetNamespace(), obj); err != nil {
-					return v1beta1helper.DeprecatedDetermineError(err)
+					return err
 				}
 			}
 		}
@@ -338,7 +335,7 @@ func MigrateExtensionObjects(
 		return err
 	}
 
-	return v1beta1helper.DeprecatedDetermineError(flow.Parallel(fns...)(ctx))
+	return flow.Parallel(fns...)(ctx)
 }
 
 // WaitUntilExtensionObjectMigrated waits until the migrate operation for the extension object is successful.
@@ -352,7 +349,7 @@ func WaitUntilExtensionObjectMigrated(
 	interval time.Duration,
 	timeout time.Duration,
 ) error {
-	if err := retry.UntilTimeout(ctx, interval, timeout, func(ctx context.Context) (done bool, err error) {
+	return retry.UntilTimeout(ctx, interval, timeout, func(ctx context.Context) (done bool, err error) {
 		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 			if client.IgnoreNotFound(err) == nil {
 				return retry.Ok()
@@ -369,10 +366,7 @@ func WaitUntilExtensionObjectMigrated(
 		}
 
 		return retry.MinorError(fmt.Errorf("error while waiting for %s to be successfully migrated", extensionKey(kind, obj.GetNamespace(), obj.GetName())))
-	}); err != nil {
-		return v1beta1helper.DeprecatedDetermineError(err)
-	}
-	return nil
+	})
 }
 
 // WaitUntilExtensionObjectsMigrated lists all extension objects of a given kind and waits until they are migrated.
@@ -395,14 +389,14 @@ func WaitUntilExtensionObjectsMigrated(
 		return err
 	}
 
-	return v1beta1helper.DeprecatedDetermineError(flow.Parallel(fns...)(ctx))
+	return flow.Parallel(fns...)(ctx)
 }
 
 // AnnotateObjectWithOperation annotates the object with the provided operation annotation value.
 func AnnotateObjectWithOperation(ctx context.Context, w client.Writer, obj client.Object, operation string) error {
 	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
 	kubernetesutils.SetMetaDataAnnotation(obj, v1beta1constants.GardenerOperation, operation)
-	kubernetesutils.SetMetaDataAnnotation(obj, v1beta1constants.GardenerTimestamp, TimeNow().UTC().String())
+	kubernetesutils.SetMetaDataAnnotation(obj, v1beta1constants.GardenerTimestamp, TimeNow().UTC().Format(time.RFC3339Nano))
 	return w.Patch(ctx, obj, patch)
 }
 

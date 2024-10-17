@@ -1,16 +1,6 @@
-// Copyright (c) 2018 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package imagevector
 
@@ -19,10 +9,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/utils/strings/slices"
 	"sigs.k8s.io/yaml"
 
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
@@ -83,6 +73,14 @@ func mergeImageSources(old, override *ImageSource) *ImageSource {
 		tag = old.Tag
 	}
 
+	version := override.Version
+	if version == nil {
+		version = old.Version
+	}
+	if version == nil && tag != nil {
+		version = old.Tag
+	}
+
 	runtimeVersion := override.RuntimeVersion
 	if runtimeVersion == nil {
 		runtimeVersion = old.RuntimeVersion
@@ -105,6 +103,7 @@ func mergeImageSources(old, override *ImageSource) *ImageSource {
 		Architectures:  architectures,
 		Repository:     override.Repository,
 		Tag:            tag,
+		Version:        version,
 	}
 }
 
@@ -255,7 +254,7 @@ func checkVersionConstraint(constraint, version *string) (score int, ok bool, er
 	return score, true, nil
 }
 
-func checkArchitectureConstraint(source []string, desired *string) (score int, ok bool, err error) {
+func checkArchitectureConstraint(source []string, desired *string) (score int, ok bool) {
 	// if image doesn't have a architecture tag it is considered as multi arch image
 	// and if worker pool machine doesn't have architecture tag it is by default considered amd64 machine.
 	var sourceArch, desiredArch = []string{v1beta1constants.ArchitectureAMD64, v1beta1constants.ArchitectureARM64}, v1beta1constants.ArchitectureAMD64
@@ -268,11 +267,11 @@ func checkArchitectureConstraint(source []string, desired *string) (score int, o
 	}
 
 	if len(sourceArch) > 1 && slices.Contains(sourceArch, desiredArch) {
-		return 1, true, nil
+		return 1, true
 	}
 	if len(sourceArch) == 1 && slices.Contains(sourceArch, desiredArch) {
 		// prioritize equal constraints
-		return 2, true, nil
+		return 2, true
 	}
 
 	return
@@ -295,9 +294,9 @@ func match(source *ImageSource, name string, opts *FindOptions) (score int, ok b
 	}
 	score += targetScore
 
-	archScore, ok, err := checkArchitectureConstraint(source.Architectures, opts.Architecture)
-	if err != nil || !ok {
-		return 0, false, err
+	archScore, ok := checkArchitectureConstraint(source.Architectures, opts.Architecture)
+	if !ok {
+		return 0, false, nil
 	}
 	score += archScore
 
@@ -349,7 +348,7 @@ func (v ImageVector) FindImage(name string, opts ...FindOptionFunc) (*Image, err
 // In case multiple images match the search, the first which was found is returned.
 // In case no image was found, an error is returned.
 func FindImages(v ImageVector, names []string, opts ...FindOptionFunc) (map[string]*Image, error) {
-	images := map[string]*Image{}
+	images := make(map[string]*Image, len(names))
 	for _, imageName := range names {
 		image, err := v.FindImage(imageName, opts...)
 		if err != nil {
@@ -369,14 +368,28 @@ func (i *ImageSource) ToImage(targetVersion *string) *Image {
 		tag = &version
 	}
 
+	version := i.Version
+	if version == nil && tag != nil {
+		version = tag
+	}
+
 	return &Image{
 		Name:       i.Name,
 		Repository: i.Repository,
 		Tag:        tag,
+		Version:    version,
 	}
 }
 
-// String will returns the string representation of the image.
+// WithOptionalTag will set the 'Tag' field of the 'Image' to <tag> in case it is nil. If 'Tag' is already set, nothing
+// happens.
+func (i *Image) WithOptionalTag(tag string) {
+	if i.Tag == nil {
+		i.Tag = &tag
+	}
+}
+
+// String returns the string representation of the image.
 func (i *Image) String() string {
 	if i.Tag == nil {
 		return i.Repository
@@ -391,8 +404,8 @@ func (i *Image) String() string {
 }
 
 // ImageMapToValues transforms the given image name to image mapping into chart Values.
-func ImageMapToValues(m map[string]*Image) map[string]interface{} {
-	out := make(map[string]interface{}, len(m))
+func ImageMapToValues(m map[string]*Image) map[string]any {
+	out := make(map[string]any, len(m))
 	for k, v := range m {
 		out[k] = v.String()
 	}

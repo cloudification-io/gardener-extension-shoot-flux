@@ -1,20 +1,12 @@
-// Copyright (c) 2022 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package heartbeat
 
 import (
+	"context"
+
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -41,7 +33,7 @@ type AddOptions struct {
 }
 
 // AddToManager adds the heartbeat controller with the default Options to the manager.
-func AddToManager(mgr manager.Manager) error {
+func AddToManager(_ context.Context, mgr manager.Manager) error {
 	return Add(mgr, AddArgs{
 		ExtensionName:        DefaultAddOptions.ExtensionName,
 		Namespace:            DefaultAddOptions.Namespace,
@@ -66,7 +58,7 @@ type AddArgs struct {
 
 // Add creates a new heartbeat controller and adds it to the given manager.
 func Add(mgr manager.Manager, args AddArgs) error {
-	args.ControllerOptions.Reconciler = NewReconciler(args.ExtensionName, args.Namespace, args.RenewIntervalSeconds, args.Clock)
+	args.ControllerOptions.Reconciler = NewReconciler(mgr, args.ExtensionName, args.Namespace, args.RenewIntervalSeconds, args.Clock)
 	args.ControllerOptions.MaxConcurrentReconciles = 1
 
 	ctrl, err := controller.New(ControllerName, mgr, args.ControllerOptions)

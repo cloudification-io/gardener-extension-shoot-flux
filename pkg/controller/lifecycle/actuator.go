@@ -8,6 +8,7 @@ package lifecycle
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,7 +22,6 @@ import (
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
 	gardenclient "github.com/gardener/gardener/pkg/client/kubernetes"
 	"github.com/gardener/gardener/pkg/extensions"
-	kutil "github.com/gardener/gardener/pkg/utils/kubernetes"
 	managedresources "github.com/gardener/gardener/pkg/utils/managedresources"
 	"github.com/gardener/gardener/pkg/utils/retry"
 	"github.com/go-logr/logr"
@@ -46,7 +46,26 @@ const (
 	ActuatorName = constants.ServiceName + "-actuator"
 )
 
-// NewActuator returns an actuator responsible for Extension resources.
+// // NewActuator returns an actuator responsible for Extension resources.
+// func NewActuator() extension.Actuator {
+// 	return &actuator{
+// 		client:          client,
+// 		clientGardenlet: clientGardenlet,
+// 		config:          config,
+// 		decoder:         decoder,
+// 		logger:          log.Log.WithName(ActuatorName),
+// 	}
+// }
+
+//	func NewActuator(client client.Client, clientGardenlet client.Client, config *rest.Config, decoder runtime.Decoder, logger logr.Logger) extension.Actuator {
+//		return &actuator{
+//			client:          client,
+//			clientGardenlet: clientGardenlet,
+//			config:          config,
+//			decoder:         decoder,
+//			logger:          log.Log.WithName(ActuatorName),
+//		}
+//	}
 func NewActuator() extension.Actuator {
 	return &actuator{
 		logger: log.Log.WithName(ActuatorName),
@@ -78,7 +97,7 @@ func (a *actuator) Reconcile(ctx context.Context, _ logr.Logger, ex *extensionsv
 
 	// fetch the configmap holding the per-project configuration for the current flux installation
 	fluxConfigMap := corev1.ConfigMap{}
-	err = a.clientGardenlet.Get(ctx, kutil.Key(projectNamespace, "flux-config"), &fluxConfigMap)
+	err = a.clientGardenlet.Get(ctx, client.ObjectKey{Namespace: projectNamespace, Name: "flux-config"}, &fluxConfigMap)
 	if err != nil {
 		return err
 	}
@@ -183,6 +202,34 @@ func (a *actuator) Delete(ctx context.Context, _ logr.Logger, ex *extensionsv1al
 	return nil
 }
 
+// ForceDelete the Extension resource.
+//
+// We don't need to wait for the ManagedResource deletion because ManagedResources are finalized by gardenlet
+// in later step in the Shoot force deletion flow.
+func (a *actuator) ForceDelete(ctx context.Context, _ logr.Logger, ex *extensionsv1alpha1.Extension) error {
+	namespace := ex.GetNamespace()
+
+	// also delete the objects in case the extension resource is deleted
+	if err := managedresources.SetKeepObjects(ctx, a.client, ex.GetNamespace(), constants.ManagedResourceNameFluxInstall, false); err != nil {
+		return fmt.Errorf("failed to destroy the flux install component: %w", err)
+	}
+	if err := managedresources.SetKeepObjects(ctx, a.client, ex.GetNamespace(), constants.ManagedResourceNameFluxConfig, false); err != nil {
+		return fmt.Errorf("failed to destroy the flux config component: %w", err)
+	}
+
+	// delete the flux configuration resource
+	if err := managedresources.DeleteForShoot(ctx, a.client, namespace, constants.ManagedResourceNameFluxConfig); err != nil {
+		return fmt.Errorf("failed to destroy the flux config component for Shoot: %w", err)
+	}
+
+	// now delete the flux installation
+	if err := managedresources.DeleteForShoot(ctx, a.client, namespace, constants.ManagedResourceNameFluxInstall); err != nil {
+		return fmt.Errorf("failed to destroy the flux install component for Shoot: %w", err)
+	}
+
+	return nil
+}
+
 // Restore the Extension resource.
 //
 // PARAMETERS
@@ -264,7 +311,7 @@ func (a *actuator) createShootResourceFluxConfig(ctx context.Context, projectNam
 		// First, we need to check whether the source secret already exists in the projectNamespace.
 		// If so, copy the data over to the per shoot secret data. Otherwise, create a new secret and
 		// deploy it to the projectNamespace and use it for the managed resource.
-		if a.clientGardenlet.Get(ctx, kutil.Key(projectNamespace, constants.FluxSourceSecretName), &fluxRepoSecret) == nil {
+		if a.clientGardenlet.Get(ctx, client.ObjectKey{Namespace: projectNamespace, Name: constants.FluxSourceSecretName}, &fluxRepoSecret) == nil {
 			a.logger.Info("Secret already exists, wont recreate", "secret", constants.FluxSourceSecretName)
 			fluxRepoSecret.APIVersion = "v1"
 			fluxRepoSecret.Kind = "Secret"
@@ -437,7 +484,7 @@ func getFluxInstallYaml(fluxVersion string) ([]byte, error) {
 func setAnnotationMrFluxInstall(ctx context.Context, c client.Client, extensionNamespace string) error {
 
 	mrFluxInstall := resourcesv1alpha1.ManagedResource{}
-	err := c.Get(ctx, kutil.Key(extensionNamespace, constants.ManagedResourceNameFluxInstall), &mrFluxInstall)
+	err := c.Get(ctx, client.ObjectKey{Namespace: extensionNamespace, Name: constants.ManagedResourceNameFluxInstall}, &mrFluxInstall)
 	if err != nil {
 		return err
 	}
@@ -455,7 +502,7 @@ func setAnnotationMrFluxInstall(ctx context.Context, c client.Client, extensionN
 // existsManagedResource ...
 func existsManagedResource(ctx context.Context, c client.Client, extensionNamespace string, name string) bool {
 	mr := resourcesv1alpha1.ManagedResource{}
-	if err := c.Get(ctx, kutil.Key(extensionNamespace, name), &mr); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Namespace: extensionNamespace, Name: name}, &mr); err != nil {
 		return false
 	}
 	return true

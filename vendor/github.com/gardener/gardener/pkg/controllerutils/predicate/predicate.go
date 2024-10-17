@@ -1,21 +1,10 @@
-// Copyright (c) 2021 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package predicate
 
 import (
-	"context"
 	"reflect"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,7 +16,6 @@ import (
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
-	contextutils "github.com/gardener/gardener/pkg/utils/context"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 )
 
@@ -71,10 +59,10 @@ func ForEventTypes(events ...EventType) predicate.Predicate {
 	}
 
 	return predicate.Funcs{
-		CreateFunc:  func(e event.CreateEvent) bool { return has(Create) },
-		UpdateFunc:  func(e event.UpdateEvent) bool { return has(Update) },
-		DeleteFunc:  func(e event.DeleteEvent) bool { return has(Delete) },
-		GenericFunc: func(e event.GenericEvent) bool { return has(Generic) },
+		CreateFunc:  func(_ event.CreateEvent) bool { return has(Create) },
+		UpdateFunc:  func(_ event.UpdateEvent) bool { return has(Update) },
+		DeleteFunc:  func(_ event.DeleteEvent) bool { return has(Delete) },
+		GenericFunc: func(_ event.GenericEvent) bool { return has(Generic) },
 	}
 }
 
@@ -141,8 +129,8 @@ func ManagedResourceConditionsChanged() predicate.Predicate {
 	)
 }
 
-// ExtensionStatusChanged returns a predicate which returns true when the status of the extension object has changed.
-func ExtensionStatusChanged() predicate.Predicate {
+// LastOperationChanged returns a predicate which returns true when the LastOperation of the passed object is changed.
+func LastOperationChanged(getLastOperation func(client.Object) *gardencorev1beta1.LastOperation) predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
 			// If the object has the operation annotation reconcile, this means it's not picked up by the extension controller.
@@ -153,7 +141,7 @@ func ExtensionStatusChanged() predicate.Predicate {
 
 			// If lastOperation State is failed then we admit reconciliation.
 			// This is not possible during create but possible during a controller restart.
-			return lastOperationStateFailed(e.Object)
+			return lastOperationStateFailed(getLastOperation(e.Object))
 		},
 
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -162,18 +150,19 @@ func ExtensionStatusChanged() predicate.Predicate {
 			// so if the oldObject doesn't have the same annotation, don't enqueue it.
 			if v1beta1helper.HasOperationAnnotation(e.ObjectNew.GetAnnotations()) {
 				operation := e.ObjectNew.GetAnnotations()[v1beta1constants.GardenerOperation]
-				if operation == v1beta1constants.GardenerOperationMigrate || operation == v1beta1constants.GardenerOperationRestore {
-					// if the oldObject doesn't have the same annotation skip
-					if e.ObjectOld.GetAnnotations()[v1beta1constants.GardenerOperation] != operation {
-						return false
-					}
-				} else {
+
+				if operation != v1beta1constants.GardenerOperationMigrate && operation != v1beta1constants.GardenerOperationRestore {
+					return false
+				}
+
+				// if the oldObject doesn't have the same annotation skip
+				if e.ObjectOld.GetAnnotations()[v1beta1constants.GardenerOperation] != operation {
 					return false
 				}
 			}
 
 			// If lastOperation State has changed to Succeeded or Error then we admit reconciliation.
-			return lastOperationStateChanged(e.ObjectOld, e.ObjectNew)
+			return lastOperationStateChanged(getLastOperation(e.ObjectOld), getLastOperation(e.ObjectNew))
 		},
 
 		DeleteFunc:  func(event.DeleteEvent) bool { return false },
@@ -181,40 +170,35 @@ func ExtensionStatusChanged() predicate.Predicate {
 	}
 }
 
-func lastOperationStateFailed(obj client.Object) bool {
-	acc, err := extensions.Accessor(obj)
-	if err != nil {
-		return false
-	}
-
-	if acc.GetExtensionStatus().GetLastOperation() == nil {
-		return false
-	}
-
-	return acc.GetExtensionStatus().GetLastOperation().State == gardencorev1beta1.LastOperationStateFailed
+// ReconciliationFinishedSuccessfully is a helper function for checking whether the last operation indicates a
+// successful reconciliation.
+func ReconciliationFinishedSuccessfully(oldLastOperation, newLastOperation *gardencorev1beta1.LastOperation) bool {
+	return oldLastOperation != nil &&
+		oldLastOperation.Type != gardencorev1beta1.LastOperationTypeDelete &&
+		oldLastOperation.State == gardencorev1beta1.LastOperationStateProcessing &&
+		newLastOperation != nil &&
+		newLastOperation.Type != gardencorev1beta1.LastOperationTypeDelete &&
+		newLastOperation.State == gardencorev1beta1.LastOperationStateSucceeded
 }
 
-func lastOperationStateChanged(oldObj, newObj client.Object) bool {
-	newAcc, err := extensions.Accessor(newObj)
-	if err != nil {
+func lastOperationStateFailed(lastOperation *gardencorev1beta1.LastOperation) bool {
+	if lastOperation == nil {
 		return false
 	}
 
-	oldAcc, err := extensions.Accessor(oldObj)
-	if err != nil {
+	return lastOperation.State == gardencorev1beta1.LastOperationStateFailed
+}
+
+func lastOperationStateChanged(oldLastOp, newLastOp *gardencorev1beta1.LastOperation) bool {
+	if newLastOp == nil {
 		return false
 	}
 
-	if newAcc.GetExtensionStatus().GetLastOperation() == nil {
-		return false
-	}
-
-	lastOperationState := newAcc.GetExtensionStatus().GetLastOperation().State
-	newLastOperationStateSucceededOrErroneous := lastOperationState == gardencorev1beta1.LastOperationStateSucceeded || lastOperationState == gardencorev1beta1.LastOperationStateError || lastOperationState == gardencorev1beta1.LastOperationStateFailed
+	newLastOperationStateSucceededOrErroneous := newLastOp.State == gardencorev1beta1.LastOperationStateSucceeded || newLastOp.State == gardencorev1beta1.LastOperationStateError || newLastOp.State == gardencorev1beta1.LastOperationStateFailed
 
 	if newLastOperationStateSucceededOrErroneous {
-		if oldAcc.GetExtensionStatus().GetLastOperation() != nil {
-			return !reflect.DeepEqual(oldAcc.GetExtensionStatus().GetLastOperation(), newAcc.GetExtensionStatus().GetLastOperation())
+		if oldLastOp != nil {
+			return !reflect.DeepEqual(oldLastOp, newLastOp)
 		}
 		return true
 	}
@@ -222,45 +206,14 @@ func lastOperationStateChanged(oldObj, newObj client.Object) bool {
 	return false
 }
 
-// IsBeingMigratedPredicate returns a predicate which returns true for objects that are being migrated to a different
-// seed cluster.
-func IsBeingMigratedPredicate(reader client.Reader, seedName string, getSeedNamesFromObject func(client.Object) (*string, *string)) predicate.Predicate {
-	return &isBeingMigratedPredicate{
-		reader:                 reader,
-		seedName:               seedName,
-		getSeedNamesFromObject: getSeedNamesFromObject,
+// GetExtensionLastOperation returns the LastOperation of the passed extension object.
+func GetExtensionLastOperation(obj client.Object) *gardencorev1beta1.LastOperation {
+	acc, err := extensions.Accessor(obj)
+	if err != nil {
+		return nil
 	}
-}
 
-type isBeingMigratedPredicate struct {
-	ctx                    context.Context
-	reader                 client.Reader
-	seedName               string
-	getSeedNamesFromObject func(client.Object) (*string, *string)
-}
-
-func (p *isBeingMigratedPredicate) InjectStopChannel(stopChan <-chan struct{}) error {
-	p.ctx = contextutils.FromStopChannel(stopChan)
-	return nil
-}
-
-// IsObjectBeingMigrated is an alias for gardenerutils.IsObjectBeingMigrated.
-var IsObjectBeingMigrated = gardenerutils.IsObjectBeingMigrated
-
-func (p *isBeingMigratedPredicate) Create(e event.CreateEvent) bool {
-	return IsObjectBeingMigrated(p.ctx, p.reader, e.Object, p.seedName, p.getSeedNamesFromObject)
-}
-
-func (p *isBeingMigratedPredicate) Update(e event.UpdateEvent) bool {
-	return IsObjectBeingMigrated(p.ctx, p.reader, e.ObjectNew, p.seedName, p.getSeedNamesFromObject)
-}
-
-func (p *isBeingMigratedPredicate) Delete(e event.DeleteEvent) bool {
-	return IsObjectBeingMigrated(p.ctx, p.reader, e.Object, p.seedName, p.getSeedNamesFromObject)
-}
-
-func (p *isBeingMigratedPredicate) Generic(e event.GenericEvent) bool {
-	return IsObjectBeingMigrated(p.ctx, p.reader, e.Object, p.seedName, p.getSeedNamesFromObject)
+	return acc.GetExtensionStatus().GetLastOperation()
 }
 
 // SeedNamePredicate returns a predicate which returns true for objects that are being migrated to a different

@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package healthcheck
 
@@ -22,12 +12,11 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	extensionsconfig "github.com/gardener/gardener/extensions/pkg/apis/config"
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
@@ -39,8 +28,6 @@ import (
 type Actuator struct {
 	restConfig *rest.Config
 	seedClient client.Client
-	scheme     *runtime.Scheme
-	decoder    runtime.Decoder
 
 	provider            string
 	extensionKind       string
@@ -50,33 +37,17 @@ type Actuator struct {
 }
 
 // NewActuator creates a new Actuator.
-func NewActuator(provider, extensionKind string, getExtensionObjFunc GetExtensionObjectFunc, healthChecks []ConditionTypeToHealthCheck, shootRESTOptions extensionsconfig.RESTOptions) HealthCheckActuator {
+func NewActuator(mgr manager.Manager, provider, extensionKind string, getExtensionObjFunc GetExtensionObjectFunc, healthChecks []ConditionTypeToHealthCheck, shootRESTOptions extensionsconfig.RESTOptions) HealthCheckActuator {
 	return &Actuator{
+		restConfig: mgr.GetConfig(),
+		seedClient: mgr.GetClient(),
+
 		healthChecks:        healthChecks,
 		getExtensionObjFunc: getExtensionObjFunc,
 		provider:            provider,
 		extensionKind:       extensionKind,
 		shootRESTOptions:    shootRESTOptions,
 	}
-}
-
-// InjectScheme injects the given runtime.Scheme into this Actuator.
-func (a *Actuator) InjectScheme(scheme *runtime.Scheme) error {
-	a.scheme = scheme
-	a.decoder = serializer.NewCodecFactory(a.scheme).UniversalDecoder()
-	return nil
-}
-
-// InjectClient injects the given client.Client into this Actuator.
-func (a *Actuator) InjectClient(client client.Client) error {
-	a.seedClient = client
-	return nil
-}
-
-// InjectConfig injects the given rest.Config into this Actuator.
-func (a *Actuator) InjectConfig(config *rest.Config) error {
-	a.restConfig = config
-	return nil
 }
 
 type healthCheckUnsuccessful struct {
@@ -183,7 +154,7 @@ func (a *Actuator) ExecuteHealthCheckFunctions(ctx context.Context, log logr.Log
 
 			healthCheckResult, err := check.Check(ctx, request)
 
-			if errorCodeCheckFunc != nil {
+			if healthCheckResult != nil && errorCodeCheckFunc != nil {
 				healthCheckResult.Codes = append(healthCheckResult.Codes, errorCodeCheckFunc(fmt.Errorf("%s", healthCheckResult.Detail))...)
 			}
 
@@ -235,12 +206,13 @@ func (a *Actuator) ExecuteHealthCheckFunctions(ctx context.Context, log logr.Log
 			checkResults = append(checkResults, Result{
 				HealthConditionType: conditionType,
 				Status:              gardencorev1beta1.ConditionFalse,
-				Detail:              pointer.String(trimTrailingWhitespace(details.String())),
+				Detail:              ptr.To(trimTrailingWhitespace(details.String())),
 				SuccessfulChecks:    result.successfulChecks,
 				UnsuccessfulChecks:  len(result.unsuccessfulChecks),
 				FailedChecks:        len(result.failedChecks),
 				Codes:               result.codes,
 			})
+
 			continue
 		}
 
@@ -266,11 +238,12 @@ func (a *Actuator) ExecuteHealthCheckFunctions(ctx context.Context, log logr.Log
 				HealthConditionType:  conditionType,
 				Status:               gardencorev1beta1.ConditionProgressing,
 				ProgressingThreshold: threshold,
-				Detail:               pointer.String(trimTrailingWhitespace(details.String())),
+				Detail:               ptr.To(trimTrailingWhitespace(details.String())),
 				SuccessfulChecks:     result.successfulChecks,
 				ProgressingChecks:    len(result.progressingChecks),
 				Codes:                result.codes,
 			})
+
 			continue
 		}
 

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 
 set -o errexit
 set -o nounset
@@ -34,8 +38,10 @@ echo "Configure seed cluster"
 "$SCRIPT_DIR"/../example/provider-extensions/seed/configure-seed.sh "$PATH_GARDEN_KUBECONFIG" "$PATH_SEED_KUBECONFIG" "$SEED_NAME"
 echo "Start bootstrapping Gardener"
 SKAFFOLD_DEFAULT_REPO=localhost:5001 SKAFFOLD_PUSH=true skaffold run -m etcd,controlplane,extensions-env -p extensions
+echo "Configure admission controllers"
+"$SCRIPT_DIR"/../example/provider-extensions/garden/configure-admission.sh "$PATH_GARDEN_KUBECONFIG" apply
 echo "Registering controllers"
-kubectl --kubeconfig "$PATH_GARDEN_KUBECONFIG" --server-side=true apply -f "$SCRIPT_DIR"/../example/provider-extensions/garden/controllerregistrations
+kubectl --kubeconfig "$PATH_GARDEN_KUBECONFIG" --server-side=true --force-conflicts=true apply -f "$SCRIPT_DIR"/../example/provider-extensions/garden/controllerregistrations
 echo "Creating CloudProfiles"
 kubectl --kubeconfig "$PATH_GARDEN_KUBECONFIG" --server-side=true apply -f "$SCRIPT_DIR"/../example/provider-extensions/garden/cloudprofiles
-"$SCRIPT_DIR"/../example/provider-extensions/seed/create-seed.sh "$PATH_GARDEN_KUBECONFIG" "$PATH_SEED_KUBECONFIG"
+"$SCRIPT_DIR"/../example/provider-extensions/seed/create-seed.sh "$PATH_GARDEN_KUBECONFIG" "$PATH_SEED_KUBECONFIG" "$SEED_NAME"

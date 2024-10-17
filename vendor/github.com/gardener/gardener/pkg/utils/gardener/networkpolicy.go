@@ -1,16 +1,6 @@
-// Copyright (c) 2023 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package gardener
 
@@ -27,16 +17,38 @@ import (
 )
 
 // InjectNetworkPolicyAnnotationsForScrapeTargets injects the provided ports into the
-// `networking.resources.gardener.cloud/from-policy-allowed-ports` annotation of the given service. In addition, it adds
-// the well-known annotation for scrape targets of Prometheus in shoot namespaces.
+// `networking.resources.gardener.cloud/from-all-scrape-targets-allowed-ports` annotation of the given service.
 func InjectNetworkPolicyAnnotationsForScrapeTargets(service *corev1.Service, ports ...networkingv1.NetworkPolicyPort) error {
+	return injectNetworkPolicyAnnotationsForScrapeTargets(service, v1beta1constants.LabelNetworkPolicyScrapeTargets, ports...)
+}
+
+// InjectNetworkPolicyAnnotationsForGardenScrapeTargets injects the provided ports into the
+// `networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports` annotation of the given service.
+func InjectNetworkPolicyAnnotationsForGardenScrapeTargets(service *corev1.Service, ports ...networkingv1.NetworkPolicyPort) error {
+	return injectNetworkPolicyAnnotationsForScrapeTargets(service, v1beta1constants.LabelNetworkPolicyGardenScrapeTargets, ports...)
+}
+
+// InjectNetworkPolicyAnnotationsForSeedScrapeTargets injects the provided ports into the
+// `networking.resources.gardener.cloud/from-all-seed-scrape-targets-allowed-ports` annotation of the given service.
+func InjectNetworkPolicyAnnotationsForSeedScrapeTargets(service *corev1.Service, ports ...networkingv1.NetworkPolicyPort) error {
+	return injectNetworkPolicyAnnotationsForScrapeTargets(service, v1beta1constants.LabelNetworkPolicySeedScrapeTargets, ports...)
+}
+
+// InjectNetworkPolicyAnnotationsForWebhookTargets injects the provided ports into the
+// `networking.resources.gardener.cloud/from-all-webhook-targets-allowed-ports` annotation of the given service.
+func InjectNetworkPolicyAnnotationsForWebhookTargets(service *corev1.Service, ports ...networkingv1.NetworkPolicyPort) error {
+	return injectNetworkPolicyAnnotationsForScrapeTargets(service, v1beta1constants.LabelNetworkPolicyWebhookTargets, ports...)
+}
+
+// InjectNetworkPolicyAnnotationsForScrapeTargets injects the provided ports into the
+// `networking.resources.gardener.cloud/from-<podLabelSelector>-allowed-ports` annotation of the given service.
+func injectNetworkPolicyAnnotationsForScrapeTargets(service *corev1.Service, podLabelSelector string, ports ...networkingv1.NetworkPolicyPort) error {
 	rawPorts, err := json.Marshal(ports)
 	if err != nil {
 		return err
 	}
 
-	metav1.SetMetaDataAnnotation(&service.ObjectMeta, resourcesv1alpha1.NetworkingFromPolicyPodLabelSelector, v1beta1constants.LabelNetworkPolicyScrapeTargets)
-	metav1.SetMetaDataAnnotation(&service.ObjectMeta, resourcesv1alpha1.NetworkingFromPolicyAllowedPorts, string(rawPorts))
+	metav1.SetMetaDataAnnotation(&service.ObjectMeta, resourcesv1alpha1.NetworkPolicyFromPolicyAnnotationPrefix+podLabelSelector+resourcesv1alpha1.NetworkPolicyFromPolicyAnnotationSuffix, string(rawPorts))
 	return nil
 }
 
@@ -54,6 +66,6 @@ func InjectNetworkPolicyNamespaceSelectors(service *corev1.Service, selectors ..
 
 // NetworkPolicyLabel returns the network policy label for a component initiating the connection to a service with the
 // given name and TCP port.
-func NetworkPolicyLabel(serviceName string, port int) string {
+func NetworkPolicyLabel(serviceName string, port int32) string {
 	return fmt.Sprintf("networking.resources.gardener.cloud/to-%s-tcp-%d", serviceName, port)
 }

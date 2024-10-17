@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package controller
 
@@ -61,8 +51,6 @@ func ReconcileError(t gardencorev1beta1.LastOperationType, description string, p
 
 // StatusUpdater contains functions for updating statuses of extension resources after a controller operation.
 type StatusUpdater interface {
-	// InjectClient injects the client into the status updater.
-	InjectClient(client.Client)
 	// Processing updates the last operation of an extension resource when an operation is started.
 	Processing(context.Context, logr.Logger, extensionsv1alpha1.Object, gardencorev1beta1.LastOperationType, string) error
 	// Error updates the last operation of an extension resource when an operation was erroneous.
@@ -76,8 +64,6 @@ type UpdaterFunc func(extensionsv1alpha1.Status) error
 
 // StatusUpdaterCustom contains functions for customized updating statuses of extension resources after a controller operation.
 type StatusUpdaterCustom interface {
-	// InjectClient injects the client into the status updater.
-	InjectClient(client.Client)
 	// ProcessingCustom updates the last operation of an extension resource when an operation is started.
 	ProcessingCustom(context.Context, logr.Logger, extensionsv1alpha1.Object, gardencorev1beta1.LastOperationType, string, UpdaterFunc) error
 	// ErrorCustom updates the last operation of an extension resource when an operation was erroneous.
@@ -87,8 +73,10 @@ type StatusUpdaterCustom interface {
 }
 
 // NewStatusUpdater returns a new status updater.
-func NewStatusUpdater() *statusUpdater {
-	return &statusUpdater{}
+func NewStatusUpdater(client client.Client) *statusUpdater {
+	return &statusUpdater{
+		client: client,
+	}
 }
 
 type statusUpdater struct {
@@ -97,10 +85,6 @@ type statusUpdater struct {
 
 var _ = StatusUpdater(&statusUpdater{})
 var _ = StatusUpdaterCustom(&statusUpdater{})
-
-func (s *statusUpdater) InjectClient(c client.Client) {
-	s.client = c
-}
 
 func (s *statusUpdater) Processing(
 	ctx context.Context,
@@ -121,7 +105,7 @@ func (s *statusUpdater) ProcessingCustom(
 	updater UpdaterFunc,
 ) error {
 	if s.client == nil {
-		return fmt.Errorf("client is not set. Call InjectClient() first")
+		return fmt.Errorf("client is not set")
 	}
 
 	log.Info(description) //nolint:logcheck
@@ -159,7 +143,7 @@ func (s *statusUpdater) ErrorCustom(
 	updater UpdaterFunc,
 ) error {
 	if s.client == nil {
-		return fmt.Errorf("client is not set. Call InjectClient() first")
+		return fmt.Errorf("client is not set")
 	}
 
 	var (
@@ -201,7 +185,7 @@ func (s *statusUpdater) SuccessCustom(
 	updater UpdaterFunc,
 ) error {
 	if s.client == nil {
-		return fmt.Errorf("client is not set. Call InjectClient() first")
+		return fmt.Errorf("client is not set")
 	}
 
 	log.Info(description) //nolint:logcheck

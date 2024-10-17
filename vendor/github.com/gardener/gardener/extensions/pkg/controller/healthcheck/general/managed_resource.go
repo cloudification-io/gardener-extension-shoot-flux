@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package general
 
@@ -56,10 +46,14 @@ func (healthChecker *ManagedResourceHealthChecker) SetLoggerSuffix(provider, ext
 }
 
 // DeepCopy clones the healthCheck struct by making a copy and returning the pointer to that new copy
+// Actually, it does not perform a *deep* copy.
 func (healthChecker *ManagedResourceHealthChecker) DeepCopy() healthcheck.HealthCheck {
-	copy := *healthChecker
-	return &copy
+	shallowCopy := *healthChecker
+	return &shallowCopy
 }
+
+// configurationProblemRegex is used to check if a not healthy managed resource has a configuration problem.
+var configurationProblemRegex = regexp.MustCompile(`(?i)(error during apply of object .* is invalid:)`)
 
 // Check executes the health check
 func (healthChecker *ManagedResourceHealthChecker) Check(ctx context.Context, request types.NamespacedName) (*healthcheck.SingleCheckResult, error) {
@@ -80,12 +74,8 @@ func (healthChecker *ManagedResourceHealthChecker) Check(ctx context.Context, re
 	if isHealthy, err := managedResourceIsHealthy(mcmDeployment); !isHealthy {
 		healthChecker.logger.Error(err, "Health check failed")
 
-		var (
-			errorCodes                 []gardencorev1beta1.ErrorCode
-			configurationProblemRegexp = regexp.MustCompile(`(?i)(error during apply of object .* is invalid:)`)
-		)
-
-		if configurationProblemRegexp.MatchString(err.Error()) {
+		var errorCodes []gardencorev1beta1.ErrorCode
+		if configurationProblemRegex.MatchString(err.Error()) {
 			errorCodes = append(errorCodes, gardencorev1beta1.ErrorConfigurationProblem)
 		}
 

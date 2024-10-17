@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package v1alpha1
 
@@ -52,6 +42,9 @@ const (
 	// It is set by the ManagedResource controller to the key of the owning ManagedResource, optionally prefixed with the
 	// clusterID.
 	OriginAnnotation = "resources.gardener.cloud/origin"
+	// FinalizeDeletionAfter is an annotation on an object part of a ManagedResource that whose value states the
+	// duration after which a deletion should be finalized (i.e., removal of `.metadata.finalizers[]`).
+	FinalizeDeletionAfter = "resources.gardener.cloud/finalize-deletion-after"
 
 	// ManagedBy is a constant for a label on an object managed by a ManagedResource.
 	// It is set by the ManagedResource controller depending on its configuration. By default it is set to "gardener".
@@ -83,12 +76,22 @@ const (
 	// LabelPurposeTokenInvalidation is a constant for a label value indicating that this secret should be considered by
 	// the token-invalidator.
 	LabelPurposeTokenInvalidation = "token-invalidator"
+	// ResourceManagerClass is a constant for the key in a label describing the class of the respective object. This can
+	// be used to differentiate between multiple instances of the same controller (e.g., token-requestor).
+	ResourceManagerClass = "resources.gardener.cloud/class"
+	// ResourceManagerClassGarden is a constant for the 'garden' class.
+	ResourceManagerClassGarden = "garden"
+	// ResourceManagerClassShoot is a constant for the 'shoot' class.
+	ResourceManagerClassShoot = "shoot"
 
 	// ServiceAccountName is the key of an annotation of a secret whose value contains the service account name.
 	ServiceAccountName = "serviceaccount.resources.gardener.cloud/name"
 	// ServiceAccountNamespace is the key of an annotation of a secret whose value contains the service account
 	// namespace.
 	ServiceAccountNamespace = "serviceaccount.resources.gardener.cloud/namespace"
+	// ServiceAccountLabels is the key of an annotation of a secret whose value contains the service account
+	// labels.
+	ServiceAccountLabels = "serviceaccount.resources.gardener.cloud/labels"
 	// ServiceAccountTokenExpirationDuration is the key of an annotation of a secret whose value contains the expiration
 	// duration of the token created.
 	ServiceAccountTokenExpirationDuration = "serviceaccount.resources.gardener.cloud/token-expiration-duration"
@@ -125,6 +128,9 @@ const (
 	HighAvailabilityConfigZonePinning = "high-availability-config.resources.gardener.cloud/zone-pinning"
 	// HighAvailabilityConfigType is a constant for a label on a resource which describes which component type it is.
 	HighAvailabilityConfigType = "high-availability-config.resources.gardener.cloud/type"
+	// HighAvailabilityConfigHostSpread is a constant for an annotation on a resource which enforces a topology spread
+	// constraint across hosts.
+	HighAvailabilityConfigHostSpread = "high-availability-config.resources.gardener.cloud/host-spread"
 	// HighAvailabilityConfigTypeController is a constant for a label value on a resource describing it's a controller.
 	HighAvailabilityConfigTypeController = "controller"
 	// HighAvailabilityConfigTypeServer is a constant for a label value on a resource describing it's a (webhook)
@@ -137,6 +143,11 @@ const (
 	// SeccompProfileSkip is a constant for a label on a Pod which indicates that this Pod should not be considered for
 	// defaulting of its seccomp profile.
 	SeccompProfileSkip = "seccompprofile.resources.gardener.cloud/skip"
+
+	// KubernetesServiceHostInject is a constant for a label on a Pod or a Namespace which indicates that all pods in
+	// this namespace (or the specific pod) should not be considered for injection of the KUBERNETES_SERVICE_HOST
+	// environment variable.
+	KubernetesServiceHostInject = "apiserver-proxy.networking.gardener.cloud/inject"
 
 	// SystemComponentsConfigSkip is a constant for a label on a Pod which indicates that this Pod should not be considered for
 	// adding default node selector and tolerations.
@@ -164,13 +175,16 @@ const (
 	// NetworkingFromWorldToPorts is a constant for an annotation on a Service which contains a list of ports to which
 	// ingress traffic from everywhere shall be allowed.
 	NetworkingFromWorldToPorts = "networking.resources.gardener.cloud/from-world-to-ports"
-	// NetworkingFromPolicyPodLabelSelector is a constant for an annotation on a Service which contains the label
-	// selector which should be used for pods initiating the communication with this Service. Note that the ports must
-	// be container ports, not service ports.
-	NetworkingFromPolicyPodLabelSelector = "networking.resources.gardener.cloud/from-policy-pod-label-selector"
-	// NetworkingFromPolicyAllowedPorts is a constant for an annotation on a Service which contains a list of ports to
-	// which ingress traffic shall be allowed. Note that the ports must be container ports, not service ports.
-	NetworkingFromPolicyAllowedPorts = "networking.resources.gardener.cloud/from-policy-allowed-ports"
+	// NetworkPolicyFromPolicyAnnotationPrefix is a constant for an annotation key prefix on a Service which contains
+	// the label selector alias which is used by pods initiating the communication to this Service. The annotation key
+	// must be suffixed with NetworkPolicyFromPolicyAnnotationSuffix, and the annotations value must be a list of
+	// container ports (not service ports).
+	NetworkPolicyFromPolicyAnnotationPrefix = "networking.resources.gardener.cloud/from-"
+	// NetworkPolicyFromPolicyAnnotationSuffix is a constant for an annotation key suffix on a Service which contains
+	// the label selector alias which is used by pods initiating the communication to this Service. The annotation key
+	// must be prefixed with NetworkPolicyFromPolicyAnnotationPrefix, and the annotations value must be a list of
+	// container ports (not service ports).
+	NetworkPolicyFromPolicyAnnotationSuffix = "-allowed-ports"
 	// NetworkingServiceName is a constant for a label on a NetworkPolicy which contains the name of the Service is has
 	// been created for.
 	NetworkingServiceName = "networking.resources.gardener.cloud/service-name"

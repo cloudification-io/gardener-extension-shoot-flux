@@ -1,16 +1,6 @@
-// Copyright (c) 2019 SAP SE or an SAP affiliate company. All rights reserved. This file is licensed under the Apache Software License, v. 2 except as noted otherwise in the LICENSE file
+// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package kubernetes
 
@@ -54,10 +44,7 @@ func ScaleDeployment(ctx context.Context, c client.Client, key client.ObjectKey,
 // scaleResource scales resource's 'spec.replicas' to replicas count
 func scaleResource(ctx context.Context, c client.Client, obj client.Object, replicas int32) error {
 	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
-
-	// TODO: replace this with call to scale subresource once controller-runtime supports it
-	// see: https://github.com/kubernetes-sigs/controller-runtime/issues/172
-	return c.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patch))
+	return c.SubResource("scale").Patch(ctx, obj, client.RawPatch(types.MergePatchType, patch))
 }
 
 // WaitUntilDeploymentScaledToDesiredReplicas waits for the number of available replicas to be equal to the deployment's desired replicas count.
