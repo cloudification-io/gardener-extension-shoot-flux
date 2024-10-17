@@ -16,7 +16,7 @@ import (
 
 	"github.com/google/go-github/v44/github"
 
-	"github.com/23technologies/gardener-extension-shoot-flux/pkg/constants"
+	"github.com/cloudification-io/gardener-extension-shoot-flux/pkg/constants"
 	"github.com/gardener/gardener/extensions/pkg/controller/extension"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"

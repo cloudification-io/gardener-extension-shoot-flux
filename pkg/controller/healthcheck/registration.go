@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/23technologies/gardener-extension-shoot-flux/pkg/constants"
+	"github.com/cloudification-io/gardener-extension-shoot-flux/pkg/constants"
 	extensionconfig "github.com/gardener/gardener/extensions/pkg/apis/config"
 	"github.com/gardener/gardener/extensions/pkg/controller/healthcheck"
 	"github.com/gardener/gardener/extensions/pkg/controller/healthcheck/general"

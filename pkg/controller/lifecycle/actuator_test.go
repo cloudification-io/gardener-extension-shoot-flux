@@ -11,7 +11,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/23technologies/gardener-extension-shoot-flux/pkg/constants"
+	"github.com/cloudification-io/gardener-extension-shoot-flux/pkg/constants"
 
 	"github.com/google/go-github/v44/github"
 )

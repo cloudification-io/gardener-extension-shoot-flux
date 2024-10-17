@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/23technologies/gardener-extension-shoot-flux/pkg/controller/lifecycle"
+	"github.com/cloudification-io/gardener-extension-shoot-flux/pkg/controller/lifecycle"
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/controller/heartbeat"
 	"github.com/gardener/gardener/extensions/pkg/util"

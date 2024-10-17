@@ -4,7 +4,7 @@
 
 EXTENSION_PREFIX            := gardener-extension
 NAME                        := shoot-flux
-REPO 						:= ghcr.io/23technologies
+REPO 						:= cloudification
 REPO_ROOT                   := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 HACK_DIR                    := $(REPO_ROOT)/hack
 TAG                     := $(shell cat "$(REPO_ROOT)/VERSION")

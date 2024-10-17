@@ -4,7 +4,7 @@
 
 ---
 image:
-  repository: ghcr.io/23technologies/gardener-extension-shoot-flux
+  repository: cloudification/gardener-extension-shoot-flux
   tag: latest
   pullPolicy: IfNotPresent
 

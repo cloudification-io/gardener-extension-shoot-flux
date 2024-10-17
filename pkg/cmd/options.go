@@ -8,8 +8,8 @@ package cmd
 import (
 	"os"
 
-	"github.com/23technologies/gardener-extension-shoot-flux/pkg/controller/healthcheck"
-	"github.com/23technologies/gardener-extension-shoot-flux/pkg/controller/lifecycle"
+	"github.com/cloudification-io/gardener-extension-shoot-flux/pkg/controller/healthcheck"
+	"github.com/cloudification-io/gardener-extension-shoot-flux/pkg/controller/lifecycle"
 	controllercmd "github.com/gardener/gardener/extensions/pkg/controller/cmd"
 	extensionshealthcheckcontroller "github.com/gardener/gardener/extensions/pkg/controller/healthcheck"
 	extensionsheartbeatcontroller "github.com/gardener/gardener/extensions/pkg/controller/heartbeat"
