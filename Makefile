@@ -38,7 +38,7 @@ start:
 		--leader-election=$(LEADER_ELECTION) \
 		--webhook-config-server-host=localhost \
 		--webhook-config-server-port=${WEBHOOK_CONFIG_PORT} \
-		--gardener-version="v1.39.0"
+		--gardener-version="v1.96.2"
 
 .PHONY: debug
 debug:
@@ -49,7 +49,7 @@ debug:
 		--leader-election=$(LEADER_ELECTION) \
 		--webhook-config-server-host=localhost \
 		--webhook-config-server-port=${WEBHOOK_CONFIG_PORT} \
-		--gardener-version="v1.39.0"
+		--gardener-version="v1.96.2"
 
 #################################################################
 # Rules related to binary build, Docker image build and release #
@@ -86,7 +86,7 @@ install-requirements:
 
 .PHONY: revendor
 revendor:
-	@GO111MODULE=on go mod tidy -compat=1.20
+	@GO111MODULE=on go mod tidy -compat=1.22
 	@GO111MODULE=on go mod vendor
 	@chmod +x $(REPO_ROOT)/vendor/github.com/gardener/gardener/hack/*
 	@chmod +x $(REPO_ROOT)/vendor/github.com/gardener/gardener/hack/.ci/*
